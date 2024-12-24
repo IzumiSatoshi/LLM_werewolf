@@ -1,6 +1,5 @@
 """
 TODO
-Is time.sleep(1) really needed? It could be shorter?
 """
 import os
 import openai
@@ -11,6 +10,7 @@ import random
 import re
 import copy
 import requests, simpleaudio, tempfile, json
+import concurrent.futures
 import pyaudio
 import wave
 import numpy as np
@@ -23,8 +23,9 @@ client = OpenAI(api_key=openai_api_key)
 
 ## MODEL SETTINGS
 ENABLE_COT = False
-# MODEL = "chatgpt-4o-latest"
-MODEL = "o1-preview"
+MODEL = "chatgpt-4o-latest"
+# MODEL = "o1-preview"
+MODEL = "o1-mini"
 TEMPERATURE = 1
 MAX_TOKEN = None
 
@@ -209,13 +210,20 @@ class GameMaster:
 
         # voted_player:count
         vote_dict = {}
-        for p in self.players:
-            voted = self.manage_selection(p)
-            if voted is not None:
-                if voted in vote_dict:
-                    vote_dict[voted] += 1
-                else:
-                    vote_dict[voted] = 1
+
+        def handle_vote(player):
+            voted = self.manage_selection(player)
+            return voted
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = {executor.submit(handle_vote, p): p for p in self.players}
+            for future in concurrent.futures.as_completed(futures):
+                voted = future.result()
+                if voted is not None:
+                    if voted in vote_dict:
+                        vote_dict[voted] += 1
+                    else:
+                        vote_dict[voted] = 1
 
         # find max voted
         max_votes = 0
@@ -251,19 +259,20 @@ class GameMaster:
         self.killed_player_names_last_night = []
         attacked_player = None
         protected_player = None
-        for player in self.players:
+
+        def handle_player_action(player):
+            nonlocal attacked_player, protected_player
             if player.role == "人狼":
-                # Werewolf don't move on the first day right?
                 if not is_first_day:
                     self.speak_to_one(player, "あなたは人狼です。誰を殺すか決めてください。")
                     attacked_player = self.manage_selection(player)
 
-            if player.role == "騎士":
+            elif player.role == "騎士":
                 if not is_first_day:
                     self.speak_to_one(player, "あなたは騎士です。人狼から守る人を一人選んでください。")
                     protected_player = self.manage_selection(player)
 
-            if player.role == "占い師":
+            elif player.role == "占い師":
                 self.speak_to_one(player, "あなたは占い師です。誰を占うか決めてください。必ず誰かを占ってください。")
                 selected_player = self.manage_selection(player)
 
@@ -276,6 +285,9 @@ class GameMaster:
                         )
                 else:
                     self.speak_to_one(player, f"選択に失敗しました。")
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(handle_player_action, player) for player in self.players]
+            concurrent.futures.wait(futures)
 
         if attacked_player is not None and attacked_player != protected_player:
             self.killed_player_names_last_night.append(attacked_player.name)
@@ -316,8 +328,8 @@ class GameMaster:
             self.speak_to_everyone(
                 f"""
 残っているプレイヤーの数が
-人狼陣営 :{werewolves}
-村人陣営 :{villagers}
+人狼 :{werewolves}
+村人 :{villagers}
 となりました。
 村人陣営の勝利です！
 
@@ -409,6 +421,19 @@ class Player:
         if self.is_human:
             self.hear("GM", f"あなたの役職は{self.role}です。")
 
+        character = None
+        if self.name == "カスカベ":
+            character = "埼玉県内の高校に通うギャルの女の子。やんちゃに見えて実は真面目な一面もある。一人称は「あーし」"
+        elif self.name == "アオヤマ":
+            character = "とにかく大柄で無骨な青年。寡黙で冷静なストッパー枠。一人称は「俺」"
+        elif self.name == "ズンダモン":
+            character = "ずんだ餅の精。やや不幸属性が備わっており、ないがしろにされることもしばしば。一人称は「僕」。「～なのだ」という語尾が特徴。"
+        elif self.name == "キガシマ":
+            character = "流行に敏感ないぶし銀おじいちゃん。非常にミーハーでノリが良い。一人称は「私」。"
+        elif self.name == "ネコツカ":
+            character = "謎の研究所で作られた。猫使シリーズの タイプ:Blue。一人称は「私」。"
+
+
         problem_explanation = textwrap.dedent(f"""
             ## problem
             テキストベースの人狼ゲームに参加している、深い論理的な考察と攻撃的なプレイで知られる天才人狼プレイヤーです。
@@ -416,6 +441,10 @@ class Player:
             ゲーム進行を務めるのはGM(Game Master)です。
             プレイヤーは全部で{len(roles)}人で、内訳は村人2人,騎士1人,占い師1人,狂人1人,人狼1人です。
             各プレイヤーが順番に発言していき{TALKS_PER_DAY}周回ると投票に移ります。
+
+            ### プレイヤーの性格
+            {self.name}の性格は次の通りです。これに従ってください。
+            {character}
 
             ### 役職の説明
             村人: ただの村人です。
@@ -437,20 +466,21 @@ class Player:
             騎士は最も重要な占い師を守るのが基本。
             人狼は、占い師を殺したいが、騎士に守られている可能性を考慮する必要がある。
             真の占い師が確定してしまうと、正しい占い結果が知られてしまうので人狼陣営にとって不利である。
-            よって、狂人または人狼は占い師を偽装する。
+            よって、狂人または人狼は占い師を騙ることが多い。
             常にクリエイティブなプレイをし、新たな可能性を探索すること。
         """)
         if ENABLE_COT:
             self.messages = [
                 {
                     # systemに役職を書いた方がいいのだろうか
-                    "role": "system" if MODEL != "o1-preview" else "user",
-                    "content": problem_explanation + textwrap.dedent(
+                    "role": "user" if "o1" in MODEL else "system",
+                    "content": textwrap.dedent(
                         f"""\
+                        {problem_explanation}
                         ## format
                         Userから入力される人狼ゲームの情報に対して、Assistantは以下のフォーマットでプレイヤーとしての発言をします。
                         - <thought></thought>ブロック内に、現在の状況、考察などを論理的に、ステップバイステップで書き出す。
-                        - <statement></statement>ブロック内に発言内容を記入する。発言は音声読み上げソフトで読み上げられるため、"**"や"- "などの特殊な記号は使えない。
+                        - <statement></statement>ブロック内に発言内容を記入する。発言は音声読み上げソフトで読み上げられるため、"**"や"- "などの特殊な記号は使えない。また、文字数は絶対に200文字以内でなければならない。
 
                         例:
                         <thought>
@@ -494,12 +524,13 @@ class Player:
             self.messages = [
                 {
                     # systemに役職を書いた方がいいのだろうか
-                    "role": "system" if MODEL != "o1-preview" else "user",
-                    "content": problem_explanation + textwrap.dedent(
+                    "role": "user" if "o1" in MODEL else "system",
+                    "content": textwrap.dedent(
                         f"""\
+                        {problem_explanation}
                         ## format
                         Userから入力される人狼ゲームの情報に対して、Assistantは以下のフォーマットでプレイヤーとしての発言をします。
-                        - <statement></statement>ブロック内に発言内容を記入する。発言は音声読み上げソフトで読み上げられるため、"**"や"- "などの特殊な記号は使えない。
+                        - <statement></statement>ブロック内に発言内容を記入する。発言は音声読み上げソフトで読み上げられるため、"**"や"- "などの特殊な記号は使えない。また、文字数は絶対に200文字以内でなければならない。
 
                         例:
                         <statement>
@@ -588,48 +619,8 @@ def call_gpt(messages, max_retries=5, timeout=600):
         # max_tokens=MAX_TOKEN,
     )
     return completion.choices[0].message.content
+
 """
-def call_gpt(messages, max_retries=5, timeout=600):
-    def api_call(api_result, event):
-        try:
-            completion = client.chat.completions.create(
-                model=MODEL,
-                messages=messages,
-                # temperature=TEMPERATURE,
-                # max_tokens=MAX_TOKEN,
-            )
-            api_result["response"] = completion.choices[0].message.content
-        except Exception as e:
-            api_result["error"] = e
-        finally:
-            event.set()
-
-    for attempt in range(max_retries):
-        api_result = {"response": None, "error": None}
-        event = threading.Event()
-        api_thread = threading.Thread(target=api_call, args=(api_result, event))
-
-        api_thread.start()
-        finished = event.wait(timeout)
-
-        if not finished:
-            print(
-                f"Timeout exceeded: {timeout}s. Attempt {attempt + 1} of {max_retries}. Retrying..."
-            )
-        else:
-            if api_result["error"] is not None:
-                print(api_result["error"])
-                print(
-                    f"API error: {api_result['error']}. Attempt {attempt + 1} of {max_retries}. Retrying..."
-                )
-            else:
-                return api_result["response"]
-
-    print("Reached maximum retries. Aborting.")
-    return None
-"""
-
-
 def voicevox(text, speaker):
     input("Press Enter to continue")
 """
@@ -666,7 +657,6 @@ def voicevox(text, speaker, max_retries=5):
             with tempfile.TemporaryDirectory() as tmp:
                 with open(f"{tmp}/audi.wav", "wb") as f:
                     f.write(response2.content)
-                    time.sleep(1)
                     wav_obj = simpleaudio.WaveObject.from_wave_file(f"{tmp}/audi.wav")
                     play_obj = wav_obj.play()
                     play_obj.wait_done()
@@ -677,7 +667,6 @@ def voicevox(text, speaker, max_retries=5):
                 print("Reached maximum retries. Aborting.")
             else:
                 time.sleep(1)
-"""
 
 
 def stt():

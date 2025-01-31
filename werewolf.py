@@ -23,9 +23,9 @@ client = OpenAI(api_key=openai_api_key)
 
 ## MODEL SETTINGS
 ENABLE_COT = False
-MODEL = "chatgpt-4o-latest"
-# MODEL = "o1-preview"
-MODEL = "o1-mini"
+# MODEL = "chatgpt-4o-latest"
+MODEL = "o1-preview"
+# MODEL = "o1-mini"
 TEMPERATURE = 1
 MAX_TOKEN = None
 

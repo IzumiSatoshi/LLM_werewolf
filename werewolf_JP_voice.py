@@ -22,10 +22,11 @@ openai_api_key = open("./openai_key.txt", "r").read().strip("\n")
 client = OpenAI(api_key=openai_api_key)
 
 ## MODEL SETTINGS
-ENABLE_COT = False
+ENABLE_COT = True
 # MODEL = "chatgpt-4o-latest"
-MODEL = "o1-preview"
-# MODEL = "o1-mini"
+# MODEL = "o1-preview"
+MODEL = "o3-mini"
+REASONING_EFFORT = "high"
 TEMPERATURE = 1
 MAX_TOKEN = None
 
@@ -466,7 +467,7 @@ class Player:
             騎士は最も重要な占い師を守るのが基本。
             人狼は、占い師を殺したいが、騎士に守られている可能性を考慮する必要がある。
             真の占い師が確定してしまうと、正しい占い結果が知られてしまうので人狼陣営にとって不利である。
-            よって、狂人または人狼は占い師を騙ることが多い。
+            よって、狂人または人狼は占い師を騙る。
             常にクリエイティブなプレイをし、新たな可能性を探索すること。
         """)
         if ENABLE_COT:
@@ -612,12 +613,22 @@ class Player:
 
 
 def call_gpt(messages, max_retries=5, timeout=600):
-    completion = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        # temperature=TEMPERATURE,
-        # max_tokens=MAX_TOKEN,
-    )
+    if REASONING_EFFORT is None:
+        completion = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            # temperature=TEMPERATURE,
+            # max_tokens=MAX_TOKEN,
+        )
+    else:
+        completion = client.chat.completions.create(
+            model=MODEL,
+            reasoning_effort=REASONING_EFFORT,
+            messages=messages,
+            # temperature=TEMPERATURE,
+            # max_tokens=MAX_TOKEN,
+        )
+
     return completion.choices[0].message.content
 
 """

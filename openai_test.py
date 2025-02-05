@@ -3,7 +3,8 @@ openai_api_key = open("./openai_key.txt", "r").read().strip("\n")
 client = OpenAI(api_key=openai_api_key)
 
 completion = client.chat.completions.create(
-    model="o1-preview",
+    model="o1",
+    # model = "gpt-4o",
     messages=[
         {"role": "system" if False else "user", "content": "You are a helpful assistant."},
         {
